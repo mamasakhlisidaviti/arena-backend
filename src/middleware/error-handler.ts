@@ -25,6 +25,12 @@ export function errorHandler(
   res: Response,
   _next: NextFunction,
 ): void {
+  if (res.headersSent) {
+    _next(error);
+    return;
+  }
+
+  const httpError = error as { type?: string; name?: string; code?: string } | null;
   let status = 500;
   let code = 'INTERNAL_ERROR';
   let message = 'An unexpected error occurred';

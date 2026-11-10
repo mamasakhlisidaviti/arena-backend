@@ -5,7 +5,7 @@ import bcrypt from 'bcryptjs';
 import { env } from '../../config/env.js';
 import { ApiError } from '../../common/errors.js';
 import { RefreshToken } from './refresh-token.model.js';
-import type { UserDocument } from '../users/user.model.js';
+import { User, type UserDocument } from '../users/user.model.js';
 
 const BCRYPT_ROUNDS = 12;
 export const REFRESH_COOKIE = 'refresh_token';
@@ -15,9 +15,14 @@ interface RefreshPayload {
   sub: string;
   jti: string;
   type: 'refresh';
+  authVersion: number;
+  exp: number;
 }
 
 export async function hashPassword(password: string): Promise<string> {
+  if (Buffer.byteLength(password, 'utf8') > 72) {
+    throw ApiError.unprocessable('Password must not exceed 72 UTF-8 bytes');
+  }
   return bcrypt.hash(password, BCRYPT_ROUNDS);
 }
 
@@ -25,8 +30,16 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return bcrypt.compare(password, hash);
 }
 
+function sessionVersion(user: UserDocument): number {
+  if (!Number.isSafeInteger(user.authVersion) || user.authVersion < 0) {
+    throw ApiError.unauthorized('Invalid session version');
+  }
+  return user.authVersion;
+}
+
 export function signAccessToken(user: UserDocument): string {
-  return jwt.sign({ sub: String(user._id), role: user.role, type: 'access' }, env.accessSecret, {
+  return jwt.sign({ sub: String(user._id), role: user.role, type: 'access', authVersion: sessionVersion(user) }, env.accessSecret, {
+    algorithm: 'HS256',
     expiresIn: env.accessTtl as SignOptions['expiresIn'],
   });
 }
@@ -47,7 +60,8 @@ function refreshCookieOptions(maxAge?: number) {
 
 export async function createSession(user: UserDocument, req: Request, res: Response): Promise<string> {
   const jti = crypto.randomUUID();
-  const token = jwt.sign({ sub: String(user._id), jti, type: 'refresh' }, env.refreshSecret, {
+  const token = jwt.sign({ sub: String(user._id), jti, type: 'refresh', authVersion: sessionVersion(user) }, env.refreshSecret, {
+    algorithm: 'HS256',
     expiresIn: env.refreshTtl as SignOptions['expiresIn'],
   });
   const decoded = jwt.decode(token) as { exp?: number } | null;
@@ -66,55 +80,71 @@ export async function createSession(user: UserDocument, req: Request, res: Respo
   return token;
 }
 
+function verifyRefreshToken(token: string): RefreshPayload {
+  const payload = jwt.verify(token, env.refreshSecret, { algorithms: ['HS256'] }) as RefreshPayload;
+  if (
+    payload.type !== 'refresh' ||
+    typeof payload.sub !== 'string' || !/^[a-f\d]{24}$/i.test(payload.sub) ||
+    typeof payload.jti !== 'string' || !payload.jti ||
+    !Number.isSafeInteger(payload.authVersion) || payload.authVersion < 0 ||
+    typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)
+  ) {
+    throw ApiError.unauthorized('Invalid session');
+  }
+  return payload;
+}
+
 export async function rotateSession(req: Request, res: Response): Promise<{ accessToken: string; user: UserDocument }> {
-  const token = req.cookies?.[REFRESH_COOKIE] as string | undefined;
-  if (!token) {
+  const token = req.cookies?.[REFRESH_COOKIE];
+  if (typeof token !== 'string' || !token) {
     throw ApiError.unauthorized('No active session');
   }
   let payload: RefreshPayload;
   try {
-    payload = jwt.verify(token, env.refreshSecret) as RefreshPayload;
+    payload = verifyRefreshToken(token);
   } catch {
     res.clearCookie(REFRESH_COOKIE, refreshCookieOptions());
     throw ApiError.unauthorized('Session expired');
   }
-  if (payload.type !== 'refresh' || !payload.jti) {
-    res.clearCookie(REFRESH_COOKIE, refreshCookieOptions());
-    throw ApiError.unauthorized('Invalid session');
-  }
 
-  const record = await RefreshToken.findOne({ jti: payload.jti });
-  if (
-    !record ||
-    record.revokedAt ||
-    record.expiresAt.getTime() < Date.now() ||
-    record.tokenHash !== hashToken(token) ||
-    String(record.userId) !== String(payload.sub)
-  ) {
-    res.clearCookie(REFRESH_COOKIE, refreshCookieOptions());
-    throw ApiError.unauthorized('Session is no longer valid');
-  }
-
-  const { User } = await import('../users/user.model.js');
-  const user = await User.findById(payload.sub);
-  if (!user || !user.isActive) {
+  const user = await User.findById(payload.sub).select('+authVersion');
+  if (!user || !user.isActive || user.authVersion !== payload.authVersion) {
     res.clearCookie(REFRESH_COOKIE, refreshCookieOptions());
     throw ApiError.unauthorized('Account is not available');
   }
 
-  record.revokedAt = new Date();
-  await record.save();
+  // Consume in one write: only the winner of concurrent requests can mint a successor.
+  const record = await RefreshToken.findOneAndUpdate(
+    {
+      jti: payload.jti,
+      userId: user._id,
+      tokenHash: hashToken(token),
+      revokedAt: null,
+      expiresAt: { $gt: new Date() },
+    },
+    { $set: { revokedAt: new Date() } },
+    { new: true },
+  );
+  if (!record) {
+    res.clearCookie(REFRESH_COOKIE, refreshCookieOptions());
+    throw ApiError.unauthorized('Session is no longer valid');
+  }
+
+  // Keep the verified version snapshot; a concurrent reset must not upgrade this session.
   const accessToken = signAccessToken(user);
   await createSession(user, req, res);
   return { accessToken, user };
 }
 
 export async function revokeSession(req: Request, res: Response): Promise<void> {
-  const token = req.cookies?.[REFRESH_COOKIE] as string | undefined;
-  if (token) {
+  const token = req.cookies?.[REFRESH_COOKIE];
+  if (typeof token === 'string' && token) {
     try {
-      const payload = jwt.verify(token, env.refreshSecret) as RefreshPayload;
-      await RefreshToken.updateOne({ jti: payload.jti }, { $set: { revokedAt: new Date() } });
+      const payload = verifyRefreshToken(token);
+      await RefreshToken.updateOne(
+        { jti: payload.jti, userId: payload.sub, tokenHash: hashToken(token), revokedAt: null },
+        { $set: { revokedAt: new Date() } },
+      );
     } catch {
       // expired or malformed tokens are simply cleared
     }

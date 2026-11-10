@@ -4,8 +4,8 @@ import { env } from '../config/env.js';
 const skip = () => env.isTest;
 
 export const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: env.isProduction ? 900 : 5000,
+  windowMs: env.http.rateWindowMs,
+  limit: env.http.apiRateLimit,
   skip,
   standardHeaders: 'draft-8',
   legacyHeaders: false,

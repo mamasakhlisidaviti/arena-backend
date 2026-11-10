@@ -294,7 +294,7 @@ export async function duplicateTournament(actor: IUser, id: string): Promise<ITo
 
 export async function getTournamentForAdmin(actor: IUser, id: string): Promise<ITournament> {
   const tournament = await Tournament.findById(id)
-    .populate('categoryId', 'name slug icon')
+    .populate('categoryId', 'name slug icon configuration.tournamentTypes configuration.formats')
     .populate('organizerId', 'firstName lastName email');
   if (!tournament) {
     throw ApiError.notFound('Tournament not found');
@@ -338,7 +338,7 @@ function periodFilter(query: {
   }
   if (query.dateTo) {
     const end = new Date(query.dateTo);
-    end.setHours(23, 59, 59, 999);
+    end.setUTCHours(23, 59, 59, 999);
     filter['startDate'] = { ...(filter['startDate'] as object), $lte: end };
   }
   if (query.online) {
@@ -363,21 +363,19 @@ function registrationStatusFilter(status: TournamentListQuery['registrationStatu
     return {};
   }
   const now = new Date();
-  if (status === 'open') {
+  if (status === 'closed') {
     return {
-      registrationDeadline: { $gt: now },
-      $expr: { $lt: ['$currentParticipants', '$participantLimit'] },
+      $or: [{ status: 'completed' }, { registrationDeadline: { $lte: now } }],
     };
   }
-  if (status === 'full') {
-    return { $expr: { $gte: ['$currentParticipants', '$participantLimit'] } };
-  }
-  if (status === 'closed') {
-    return { registrationDeadline: { $lte: now } };
-  }
   return {
-    registrationDeadline: { $gt: now, $lte: new Date(now.getTime() + 7 * DAY) },
-    $expr: { $lt: ['$currentParticipants', '$participantLimit'] },
+    status: { $in: ['published', 'ongoing'] },
+    registrationDeadline: status === 'closing_soon'
+      ? { $gt: now, $lt: new Date(now.getTime() + 3 * DAY) }
+      : { $gt: now },
+    $expr: status === 'full'
+      ? { $gte: ['$currentParticipants', '$participantLimit'] }
+      : { $lt: ['$currentParticipants', '$participantLimit'] },
   };
 }
 
@@ -403,16 +401,16 @@ async function searchFilter(q: string): Promise<QueryFilter<ITournament>> {
 function applySort(sort: TournamentListQuery['sort']): Record<string, 1 | -1> {
   switch (sort) {
     case 'oldest':
-      return { createdAt: 1 };
+      return { createdAt: 1, _id: 1 };
     case 'upcoming':
-      return { startDate: 1 };
+      return { startDate: 1, _id: 1 };
     case 'deadline':
-      return { registrationDeadline: 1 };
+      return { registrationDeadline: 1, _id: 1 };
     case 'popular':
-      return { currentParticipants: -1, createdAt: -1 };
+      return { currentParticipants: -1, createdAt: -1, _id: -1 };
     case 'newest':
     default:
-      return { createdAt: -1 };
+      return { createdAt: -1, _id: -1 };
   }
 }
 
@@ -433,12 +431,14 @@ export async function listPublicTournaments(query: TournamentListQuery) {
   if (query.q) {
     Object.assign(filter, await searchFilter(query.q));
   }
-  Object.assign(filter, registrationStatusFilter(query.registrationStatus));
+  if (query.registrationStatus) {
+    filter['$and'] = [registrationStatusFilter(query.registrationStatus)];
+  }
 
   const [items, total] = await Promise.all([
     Tournament.find(filter)
-      .select('-description -rules -prizes -seo -contact -gameSettings')
-      .populate('categoryId', 'name slug icon')
+      .select('-description -rules -prizes -seo -contact')
+      .populate('categoryId', 'name slug icon configuration.tournamentTypes configuration.formats')
       .populate('organizerId', 'firstName lastName')
       .sort(applySort(query.sort))
       .skip((query.page - 1) * query.limit)
@@ -477,7 +477,7 @@ export async function listAdminTournaments(actor: IUser, query: AdminTournamentQ
   const [items, total] = await Promise.all([
     Tournament.find(filter)
       .select('-description -rules -prizes -seo -contact')
-      .populate('categoryId', 'name slug icon')
+      .populate('categoryId', 'name slug icon configuration.tournamentTypes configuration.formats')
       .populate('organizerId', 'firstName lastName email')
       .sort(applySort(query.sort))
       .skip((query.page - 1) * query.limit)

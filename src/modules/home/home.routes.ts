@@ -29,9 +29,9 @@ homeRouter.get(
       })
         .sort({ startDate: 1 })
         .limit(3)
-        .populate('categoryId', 'name slug icon')
+        .populate('categoryId', 'name slug icon configuration.tournamentTypes configuration.formats')
         .populate('organizerId', 'firstName lastName')
-        .select('-description -rules -prizes -seo -contact -gameSettings'),
+        .select('-description -rules -prizes -seo -contact'),
       Tournament.find({
         status: 'published',
         publishedAt: { $ne: null },
@@ -39,15 +39,15 @@ homeRouter.get(
       })
         .sort({ startDate: 1 })
         .limit(6)
-        .populate('categoryId', 'name slug icon')
+        .populate('categoryId', 'name slug icon configuration.tournamentTypes configuration.formats')
         .populate('organizerId', 'firstName lastName')
-        .select('-description -rules -prizes -seo -contact -gameSettings'),
+        .select('-description -rules -prizes -seo -contact'),
       Tournament.find({ status: 'published', publishedAt: { $ne: null } })
         .sort({ publishedAt: -1 })
         .limit(3)
-        .populate('categoryId', 'name slug icon')
+        .populate('categoryId', 'name slug icon configuration.tournamentTypes configuration.formats')
         .populate('organizerId', 'firstName lastName')
-        .select('-description -rules -prizes -seo -contact -gameSettings'),
+        .select('-description -rules -prizes -seo -contact'),
       Tournament.aggregate([
         { $match: { status: { $in: ['published', 'ongoing', 'completed'] }, publishedAt: { $ne: null } } },
         {

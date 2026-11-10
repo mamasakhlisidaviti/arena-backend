@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { Express } from 'express';
+import mongoose from 'mongoose';
 import { createApp } from '../src/app.js';
 import { connectDatabase, disconnectDatabase } from '../src/config/database.js';
 import { initModels } from '../src/config/init.js';
@@ -86,6 +87,9 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  if (process.env['NODE_ENV'] !== 'test' || mongoose.connection.name !== 'tournament_platform_test') {
+    throw new Error('Refusing cleanup outside the isolated test database');
+  }
   await Promise.all([
     User.deleteMany({}),
     GameCategory.deleteMany({}),

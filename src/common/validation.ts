@@ -36,7 +36,8 @@ export const passwordSchema = z
   .min(8, 'Password must contain at least 8 characters')
   .max(72)
   .regex(/[A-Za-z]/, 'Password must contain a letter')
-  .regex(/\d/, 'Password must contain a number');
+  .regex(/\d/, 'Password must contain a number')
+  .refine((value) => Buffer.byteLength(value, 'utf8') <= 72, 'Password must not exceed 72 UTF-8 bytes');
 
 export const objectIdSchema = z.string().regex(/^[a-f\d]{24}$/i, 'Invalid identifier');
 

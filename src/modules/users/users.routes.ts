@@ -100,17 +100,22 @@ usersRouter.patch(
     if (String(actor._id) === id && input.role && input.role !== 'super_admin') {
       throw ApiError.badRequest('You cannot change your own role');
     }
-    const user = await User.findById(id);
+    const { password, ...rest } = input;
+    const securityUpdate = password !== undefined || input.role !== undefined || input.isActive !== undefined;
+    const user = await User.findByIdAndUpdate(
+      id,
+      {
+        $set: { ...rest, ...(password !== undefined ? { passwordHash: await hashPassword(password) } : {}) },
+        ...(securityUpdate ? { $inc: { authVersion: 1 } } : {}),
+      },
+      { new: true, runValidators: true },
+    );
     if (!user) {
       throw ApiError.notFound('User not found');
     }
-    const { password, ...rest } = input;
-    Object.assign(user, rest);
-    if (password) {
-      user.passwordHash = await hashPassword(password);
+    if (securityUpdate) {
       await revokeAllSessions(String(user._id));
     }
-    await user.save();
     sendSuccess(res, toPublicUser(user));
   }),
 );
@@ -124,12 +129,14 @@ usersRouter.delete(
     if (String(actor._id) === id) {
       throw ApiError.badRequest('You cannot deactivate your own account');
     }
-    const user = await User.findById(id);
+    const user = await User.findByIdAndUpdate(
+      id,
+      { $set: { isActive: false }, $inc: { authVersion: 1 } },
+      { new: true, runValidators: true },
+    );
     if (!user) {
       throw ApiError.notFound('User not found');
     }
-    user.isActive = false;
-    await user.save();
     await revokeAllSessions(String(user._id));
     res.status(204).send();
   }),

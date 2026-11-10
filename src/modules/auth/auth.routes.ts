@@ -7,7 +7,7 @@ import { emailSchema, languageSchema, passwordSchema } from '../../common/valida
 import { authenticate, currentUser } from '../../middleware/auth.js';
 import { authLimiter } from '../../middleware/rate-limit.js';
 import { validate, validated } from '../../middleware/validate.js';
-import { User, toPublicUser } from '../users/user.model.js';
+import { User, toPublicUser, type UserDocument } from '../users/user.model.js';
 import {
   createSession,
   hashPassword,
@@ -27,9 +27,11 @@ const registerSchema = z.object({
   preferredLanguage: languageSchema.optional().default('ka'),
 });
 
+// Existing bcrypt hashes may have accepted >72 UTF-8 bytes; keep verification compatible.
+const existingPasswordSchema = z.string().min(1).max(200);
 const loginSchema = z.object({
   email: emailSchema,
-  password: z.string().min(1).max(200),
+  password: existingPasswordSchema,
 });
 
 const profileSchema = z.object({
@@ -40,9 +42,21 @@ const profileSchema = z.object({
 });
 
 const passwordChangeSchema = z.object({
-  currentPassword: z.string().min(1),
+  currentPassword: existingPasswordSchema,
   newPassword: passwordSchema,
 });
+
+function credentialsFilter(user: UserDocument) {
+  return {
+    _id: user._id,
+    isActive: true,
+    passwordHash: user.passwordHash,
+    // Legacy documents have no stored version until their first security update.
+    ...(user.authVersion === 0
+      ? { $or: [{ authVersion: 0 }, { authVersion: { $exists: false } }] }
+      : { authVersion: user.authVersion }),
+  };
+}
 
 export const authRouter = Router();
 
@@ -77,15 +91,22 @@ authRouter.post(
   validate(loginSchema),
   asyncHandler(async (req, res) => {
     const input = validated<z.infer<typeof loginSchema>>(req, 'body');
-    const user = await User.findOne({ email: input.email }).select('+passwordHash');
+    const user = await User.findOne({ email: input.email }).select('+passwordHash +authVersion');
     if (!user || !user.isActive || !(await verifyPassword(input.password, user.passwordHash))) {
       throw ApiError.unauthorized('Incorrect email or password');
     }
-    user.lastLoginAt = new Date();
-    await user.save();
-    const accessToken = signAccessToken(user);
-    await createSession(user, req, res);
-    sendSuccess(res, { accessToken, user: toPublicUser(user) });
+    // Do not promote a password verified before a concurrent reset to the new version.
+    const authenticatedUser = await User.findOneAndUpdate(
+      credentialsFilter(user),
+      { $set: { lastLoginAt: new Date() } },
+      { new: true },
+    ).select('+authVersion');
+    if (!authenticatedUser) {
+      throw ApiError.unauthorized('Credentials changed; please log in again');
+    }
+    const accessToken = signAccessToken(authenticatedUser);
+    await createSession(authenticatedUser, req, res);
+    sendSuccess(res, { accessToken, user: toPublicUser(authenticatedUser) });
   }),
 );
 
@@ -132,18 +153,25 @@ authRouter.post(
   authenticate,
   validate(passwordChangeSchema),
   asyncHandler(async (req, res) => {
-    const user = await User.findById(currentUser(req)._id).select('+passwordHash');
-    if (!user) {
+    const actor = currentUser(req);
+    const user = await User.findById(actor._id).select('+passwordHash +authVersion');
+    if (!user || !user.isActive || user.authVersion !== actor.authVersion) {
       throw ApiError.unauthorized();
     }
     const input = validated<z.infer<typeof passwordChangeSchema>>(req, 'body');
     if (!(await verifyPassword(input.currentPassword, user.passwordHash))) {
       throw ApiError.badRequest('Current password is incorrect');
     }
-    user.passwordHash = await hashPassword(input.newPassword);
-    await user.save();
+    const updated = await User.findOneAndUpdate(
+      credentialsFilter(user),
+      { $set: { passwordHash: await hashPassword(input.newPassword) }, $inc: { authVersion: 1 } },
+      { new: true, runValidators: true },
+    );
+    if (!updated) {
+      throw ApiError.unauthorized('Credentials changed; please log in again');
+    }
     await revokeAllSessions(String(user._id));
-    res.clearCookie('refresh_token', { path: '/api/auth' });
-    sendSuccess(res, { message: 'Password updated' });
+    await revokeSession(req, res);
+    sendSuccess(res, { message: 'Password updated', requiresLogin: true });
   }),
 );

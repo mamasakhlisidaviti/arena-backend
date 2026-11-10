@@ -14,7 +14,7 @@ Only Nginx is public. The API and the SSR server listen on the same host and com
 
 - Ubuntu 24.04 VPS (2 vCPU / 2 GB RAM minimum; the frontend build is the memory-heavy step)
 - A domain with an `A` record pointing at the VPS
-- MongoDB Atlas cluster (or any MongoDB 7+ instance) with a dedicated database user
+- MongoDB Atlas cluster (or MongoDB 7+ replica set/sharded cluster) with a dedicated database user; standalone MongoDB is rejected because registration and media changes require transactions
 - Node.js 22+ (24 LTS recommended) on the server
 - `git`, `nginx`, `certbot`
 

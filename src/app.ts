@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { env } from './config/env.js';
-import { sanitizeRequest } from './middleware/sanitize.js';
+import { enforceRequestPolicy, sanitizeRequest } from './middleware/sanitize.js';
 import { apiLimiter } from './middleware/rate-limit.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
 import { authRouter } from './modules/auth/auth.routes.js';

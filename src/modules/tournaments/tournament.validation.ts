@@ -107,15 +107,15 @@ export const tournamentStatusSchema = z.object({
   status: z.enum(['draft', 'published', 'ongoing', 'completed', 'cancelled']),
 });
 
-export const tournamentListQuerySchema = z.object({
+const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),
   limit: z.coerce.number().int().min(1).max(48).default(12),
   q: z.string().trim().max(120).optional(),
   category: z.string().trim().max(80).optional(),
   status: z.enum(['published', 'ongoing', 'completed']).optional(),
   registrationStatus: z.enum(['open', 'closing_soon', 'full', 'closed']).optional(),
-  dateFrom: z.coerce.date().optional(),
-  dateTo: z.coerce.date().optional(),
+  dateFrom: z.iso.date().transform((value) => new Date(value)).optional(),
+  dateTo: z.iso.date().transform((value) => new Date(value)).optional(),
   online: z.enum(['true', 'false']).optional(),
   city: z.string().trim().max(120).optional(),
   fee: z.enum(['free', 'paid']).optional(),
@@ -123,9 +123,17 @@ export const tournamentListQuerySchema = z.object({
   sort: z.enum(['newest', 'oldest', 'upcoming', 'deadline', 'popular']).default('newest'),
 });
 
-export const adminTournamentQuerySchema = tournamentListQuerySchema.extend({
+export const tournamentListQuerySchema = listQuerySchema.refine(
+  (query) => !query.dateFrom || !query.dateTo || query.dateFrom <= query.dateTo,
+  { message: 'End date must not precede start date', path: ['dateTo'] },
+);
+
+export const adminTournamentQuerySchema = listQuerySchema.extend({
   status: z.enum(['draft', 'published', 'ongoing', 'completed', 'cancelled']).optional(),
-});
+}).refine(
+  (query) => !query.dateFrom || !query.dateTo || query.dateFrom <= query.dateTo,
+  { message: 'End date must not precede start date', path: ['dateTo'] },
+);
 
 export type TournamentListQuery = z.infer<typeof tournamentListQuerySchema>;
 export type AdminTournamentQuery = z.infer<typeof adminTournamentQuerySchema>;

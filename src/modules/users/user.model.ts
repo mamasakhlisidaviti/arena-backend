@@ -11,6 +11,7 @@ export interface IUser {
   email: string;
   phone?: string;
   passwordHash: string;
+  authVersion: number;
   role: UserRole;
   avatar?: MediaAsset | null;
   preferredLanguage: keyof LocalizedString;
@@ -29,13 +30,14 @@ const userSchema = new Schema<IUser>(
     email: { type: String, required: true, unique: true, lowercase: true, trim: true, maxlength: 180 },
     phone: { type: String, trim: true, maxlength: 30 },
     passwordHash: { type: String, required: true, select: false },
+    authVersion: { type: Number, required: true, default: 0, min: 0, validate: Number.isSafeInteger, select: false },
     role: { type: String, enum: ['super_admin', 'admin', 'participant'], default: 'participant', index: true },
     avatar: { type: mediaSchema, default: null },
     preferredLanguage: { type: String, enum: ['ka', 'en', 'ru'], default: 'ka' },
     isActive: { type: Boolean, default: true },
     lastLoginAt: { type: Date, default: null },
   },
-  { timestamps: true, toJSON: schemaJsonOptions(['passwordHash']) },
+  { timestamps: true, toJSON: schemaJsonOptions(['passwordHash', 'authVersion']) },
 );
 
 userSchema.index({ role: 1, createdAt: -1 });

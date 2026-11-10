@@ -7,6 +7,8 @@ import { User, type UserDocument } from '../modules/users/user.model.js';
 interface AccessPayload {
   sub: string;
   type: 'access';
+  authVersion: number;
+  exp: number;
 }
 
 type RequestWithUser = Request & { user?: UserDocument };
@@ -22,15 +24,20 @@ function extractToken(req: Request): string | null {
 async function resolveUser(token: string): Promise<UserDocument> {
   let payload: AccessPayload;
   try {
-    payload = jwt.verify(token, env.accessSecret) as AccessPayload;
+    payload = jwt.verify(token, env.accessSecret, { algorithms: ['HS256'] }) as AccessPayload;
   } catch {
     throw ApiError.unauthorized('Session expired');
   }
-  if (payload.type !== 'access' || !payload.sub) {
+  if (
+    payload.type !== 'access' ||
+    typeof payload.sub !== 'string' || !/^[a-f\d]{24}$/i.test(payload.sub) ||
+    !Number.isSafeInteger(payload.authVersion) || payload.authVersion < 0 ||
+    typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)
+  ) {
     throw ApiError.unauthorized('Invalid token');
   }
-  const user = await User.findById(payload.sub);
-  if (!user || !user.isActive) {
+  const user = await User.findById(payload.sub).select('+authVersion');
+  if (!user || !user.isActive || user.authVersion !== payload.authVersion) {
     throw ApiError.unauthorized('Account is not available');
   }
   return user;
