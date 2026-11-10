@@ -93,3 +93,5 @@ The seed is idempotent: it creates the chess category, settings and demo tournam
 ## Deployment
 
 Run `npm run build` and start with `node dist/index.js` behind a reverse proxy. Point `PUBLIC_SITE_URL` at the public domain, add the site origin to `CLIENT_ORIGINS`, provide a strong `MONGODB_URI` and JWT secrets, and either configure Cloudinary or mount a persistent volume for `UPLOAD_DIR`.
+
+Full production guide: [DEPLOYMENT.md](DEPLOYMENT.md).
